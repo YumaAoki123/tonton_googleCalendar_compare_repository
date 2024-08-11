@@ -13,6 +13,12 @@ from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
 import pytz
+import sqlite3
+import tkinter as tk
+from tkinter import messagebox, simpledialog, ttk ,Toplevel
+import uuid
+import time
+import threading
 # Webスクレイピング処理を行う関数
 
 
@@ -21,7 +27,7 @@ load_dotenv()
 email = os.getenv('EMAIL')
 
 # サービスアカウントキーファイルのパスを指定する
-SERVICE_ACCOUNT_FILE = '/tonton_compaire_app/creditials.json'
+SERVICE_ACCOUNT_FILE = '/tonton_googleCalendar_compare_app/creditials.json'
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -31,10 +37,58 @@ credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCO
 # Google Calendar API を使うための準備
 service = build('calendar', 'v3', credentials=credentials)
 
-def insert_event_to_calendar(service, date, start_time, end_time, summary="スケジュール",color_id="6"):
+# SQLiteデータベースに接続（ファイルが存在しない場合は作成されます）
+conn = sqlite3.connect('tonton_calendar_compare.db')
+cursor = conn.cursor()
+
+# テーブルを作成します（存在しない場合のみ）
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS event_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_uuid TEXT NOT NULL,
+    event_id TEXT NOT NULL
+)
+''')
+
+# テーブルを作成します（存在しない場合のみ）
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS task_info (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_uuid TEXT NOT NULL,
+    task_name TEXT NOT NULL
+)
+''')
+
+# 接続を閉じます
+conn.commit()
+conn.close()
+
+def load_tasks():
+    conn = sqlite3.connect('tonton_calendar_compare.db')
+    cursor = conn.cursor()
+    
+    # タスク情報をデータベースから読み込む
+    cursor.execute('SELECT task_uuid, task_name FROM task_info')
+    rows = cursor.fetchall()
+    
+    global tasks
+    tasks = []
+    
+    for row in rows:
+        task = {
+            "task_uuid": row[0],
+            "task_name": row[1],
+        }
+        tasks.append(task)
+        print(f"Loaded task: {task}")  # デバッグ用の出力
+       
+    conn.close()
+
+def insert_event_to_calendar(service, date, start_time, end_time, task_uuid, title, conn, color_id="6"):
+
     """Googleカレンダーにイベントを挿入します。"""
     event = {
-        'summary': summary,
+        'summary': title,
         'start': {
             'dateTime': start_time.isoformat(),
             'timeZone': 'Asia/Tokyo',
@@ -45,9 +99,38 @@ def insert_event_to_calendar(service, date, start_time, end_time, summary="ス�
         },
         'colorId': color_id,  # イベントの色を設定
     }
-    event_result = service.events().insert(calendarId=email, body=event).execute()
-    print(f"イベントを追加しました: {event_result.get('htmlLink')}")
+    try:
+        event_result = service.events().insert(calendarId=email, body=event).execute()
+        print(f"イベントを追加しました: {event_result.get('htmlLink')}")
+        
+        event_id = event_result.get('id')
+        save_uuid_event_id_mapping(task_uuid, event_id, conn)
+       
+    except HttpError as error:
+                print(f'An error occurred: {error}')
+                raise
 
+def save_uuid_event_id_mapping(uuid, event_id, conn):
+    try:
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO event_mappings (task_uuid, event_id) VALUES (?, ?)', (uuid, event_id))
+    except sqlite3.Error as e:
+        print(f"Error saving event ID mapping: {e}")
+        raise
+
+def save_uuid_task_name(uuid, task_name, conn):
+    try:
+        cursor = conn.cursor()
+        cursor.execute('INSERT INTO task_info (task_uuid, task_name) VALUES (?, ?)', (uuid, task_name))
+    except sqlite3.Error as e:
+        print(f"Error saving task: {e}")
+        raise
+
+def update_task_listbox():
+    task_listbox.delete(0, ctk.END)
+    for task in tasks:
+        print(f"Current task: {task}")  # デバッグ用の出力
+        task_listbox.insert(ctk.END, f"{task['task_name']}")
 
 
 def scrape_data(url):
@@ -129,55 +212,224 @@ def scrape_data(url):
     finally:
         driver.quit()
 
+def get_event_ids_by_uuid(uuid):
+    """指定されたUUIDに関連するすべてのイベントIDを取得します。"""
+    event_ids = []
+    try:
+        # SQLiteデータベースに接続
+        conn = sqlite3.connect('tonton_calendar_compare.db')
+        cursor = conn.cursor()
+        
+        # UUIDに基づくイベントIDの取得
+        cursor.execute("SELECT event_id FROM event_mappings WHERE task_uuid = ?", (uuid,))
+        event_ids = [row[0] for row in cursor.fetchall()]
+        
+        conn.close()
+    except sqlite3.Error as e:
+        print(f"データベースエラー: {e}")
+    
+    return event_ids
+
+def on_delete():
+    progress_bar.set(0)  # プログレスバーをリセット
+    # サブミット時の処理を別スレッドで実行する
+    threading.Thread(target=delete_selected_task, daemon=True).start()
+
+def delete_selected_task():
+    
+    selected_task_index = task_listbox.curselection()
+    
+    if selected_task_index:
+        index = selected_task_index[0]  # 選択されたタスクのインデックス
+        task_uuid = tasks[index]['task_uuid']  # UUIDを取得
+        calendar_id = email  # カレンダーIDを設定
+        
+        # UUIDに基づいて関連するイベントIDを取得
+        event_ids = get_event_ids_by_uuid(task_uuid)
+        
+        if not event_ids:
+            print("UUIDに関連するイベントIDが見つかりませんでした。")
+            return
+        
+        total_events = len(event_ids)  # 総イベント数
+        completed_events = 0  # 完了したイベント数
+
+        # Googleカレンダーのイベントを削除
+        delete_successful = True
+        for event_id in event_ids:
+            if delete_google_calendar_event(service, calendar_id, event_id):
+                completed_events += 1
+                progress = completed_events / total_events
+                progress_bar.set(progress)  # プログレスバーを更新
+                app.update_idletasks()  # GUIの更新を確実に反映する
+            else:
+                delete_successful = False
+        # 削除に成功したか確認し、データベースからタスク情報を削除
+        conn = sqlite3.connect('tonton_calendar_compare.db')
+        try:
+            cursor = conn.cursor()
+            if delete_successful:
+                # Googleカレンダーでイベント削除成功した場合
+                delete_event_ids_by_uuid(cursor, task_uuid)
+                delete_task_info_by_uuid(cursor, task_uuid)
+                conn.commit()  # コミット
+                print("タスクと関連イベントが削除されました。")
+            else:
+                # Googleカレンダーでイベント削除失敗した場合
+                # イベントが削除された場合もあるため、タスク情報を削除するか確認する
+                delete_event_ids_by_uuid(cursor, task_uuid)
+                delete_task_info_by_uuid(cursor, task_uuid)
+                conn.commit()  # コミット
+                print("イベントの削除が一部失敗しましたが、データベースの整合性を保つためにタスク情報も削除しました。")
+                
+            # タスクをリストから削除
+            del tasks[index]
+
+            # リストボックスを更新
+            update_task_delete_listbox()
+
+        except Exception as e:
+            conn.rollback()  # エラーが発生した場合はロールバック
+            print(f"削除中にエラーが発生しました: {e}")
+        finally:
+            conn.close()
+            progress_bar.set(1)  # プログレスバーを完了に設定
+    else:
+        print("削除するタスクを選択してください。")
+
+#一連のdelete関連のトランザクションを後で実装する
+def delete_event_ids_by_uuid(cursor, uuid):
+    try:
+        cursor.execute('DELETE FROM event_mappings WHERE task_uuid = ?', (uuid,))
+    except Exception as e:
+        raise e
+
+def delete_task_info_by_uuid(cursor, task_uuid):
+    try:
+        cursor.execute('DELETE FROM task_info WHERE task_uuid = ?', (task_uuid,))
+    except Exception as e:
+        raise e
+
+def delete_google_calendar_event(service, calendar_id, event_id):
+    try:
+        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        return True
+    except Exception as e:
+        print(f"イベント削除中にエラーが発生しました: {e}")
+        return False
 
 
-def create_gui():
-    app = ctk.CTk()
-    app.title("Web Scraper GUI")
-    app.geometry("600x500")
+# タスクリストを更新する関数
+def update_task_delete_listbox():
+    task_listbox.delete(0, ctk.END)
+    for task in tasks:
+        task_listbox.insert(ctk.END, f"{task['task_name']}")
+def on_submit():
+    progress_bar.set(0)  # プログレスバーをリセット
+    # サブミット時の処理を別スレッドで実行する
+    threading.Thread(target=submit_task, daemon=True).start()
 
-    # URL入力用のエントリー
-    url_label = ctk.CTkLabel(app, text="URLを入力してください:")
-    url_label.pack(pady=5)
-    url_entry = ctk.CTkEntry(app, width=300)
-    url_entry.pack(pady=5)
-
-    # タイトル入力用のエントリー
-    title_label = ctk.CTkLabel(app, text="イベントのタイトルを入力してください:")
-    title_label.pack(pady=5)
-    title_entry = ctk.CTkEntry(app, width=300)
-    title_entry.pack(pady=5)
-
-    # 出力エリア
-    output_text = ctk.CTkTextbox(app, width=300, height=150)
-    output_text.pack(pady=10)
-
-    # 決定ボタンのコールバック関数
-    def on_submit():
+def submit_task():
+    url_valid = validate_entry(url_entry)
+    title_valid = validate_entry(title_entry)
+    
+    # 両方が有効な場合のみ処理を続行
+    if url_valid and title_valid:
         url = url_entry.get()
         title = title_entry.get()
         schedule_data = scrape_data(url)
-       
 
-        output_text.delete("1.0", ctk.END)
-        for date, times in schedule_data.items():
-            date_obj = datetime.strptime(date.split('(')[0], "%Y/%m/%d")
-            for time in times:
-                start_hour = int(time[:2])
-                start_minute = int(time[2:])
-                start_time = datetime(date_obj.year, date_obj.month, date_obj.day, start_hour, start_minute)
-                end_time = start_time + timedelta(minutes=30)
-                
-                # Googleカレンダーにイベントを挿入
-                insert_event_to_calendar(service, date, start_time, end_time, title)
+        # タスクに固有のIDを生成
+        task_uuid = str(uuid.uuid4())
+        
+        # SQLiteデータベース接続
+        conn = sqlite3.connect('tonton_calendar_compare.db')
+        conn.isolation_level = None  # 自動コミットを無効にする
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute('BEGIN TRANSACTION')  # トランザクション開始
+            save_uuid_task_name(task_uuid, title, conn)
 
-                output_text.insert(ctk.END, f"{date} {start_time.strftime('%H:%M')}-{end_time.strftime('%H:%M')}にイベントを挿入しました。\n")
+            total_events = sum(len(times) for times in schedule_data.values())
+            completed_events = 0
+            
+            for date, times in schedule_data.items():
+                date_obj = datetime.strptime(date.split('(')[0], "%Y/%m/%d")
+                for time in times:
+                    start_hour = int(time[:2])
+                    start_minute = int(time[2:])
+                    start_time = datetime(date_obj.year, date_obj.month, date_obj.day, start_hour, start_minute)
+                    end_time = start_time + timedelta(minutes=30)
+                    
+                    # Googleカレンダーにイベントを挿入
+                    insert_event_to_calendar(service, date, start_time, end_time, task_uuid, title, conn)
+                    completed_events += 1
+                    progress = completed_events / total_events
+                    progress_bar.set(progress)  # プログレスバーを更新
+                    app.update_idletasks()  # GUIの更新を確実に反映する
+            cursor.execute('COMMIT')  # コミット
+            print("すべてのデータが成功裏に保存されました")
+            
+        except Exception as e:
+            cursor.execute('ROLLBACK')  # ロールバック
+            print(f"エラーが発生したため、変更を元に戻しました: {e}")
+        
+        finally:
+            conn.close()
+            load_tasks()
+            update_task_listbox()
+            progress_bar.set(1)  # プログレスバーを完了に設定
 
-    # 決定ボタン
-    submit_button = ctk.CTkButton(app, text="Google Calendarに追加", command=on_submit)
-    submit_button.pack(pady=10)
+def validate_entry(entry):
+    """エントリーが空の場合に枠を赤くする関数"""
+    if not entry.get().strip():  # 入力が空かどうかをチェック
+        entry.configure(border_color="red")
+        return False
+    else:
+        entry.configure(border_color="black")  # 入力があればデフォルトの色に戻す
+        return True        
 
-    app.mainloop()
+app = ctk.CTk()
+app.title("Support Schedule Adjustment")
+app.geometry("400x450")
 
-# GUIアプリケーションを起動
-create_gui()
+# グリッドの列幅を均等に設定
+app.grid_columnconfigure(0, weight=1)
+app.grid_columnconfigure(1, weight=1)
+
+# URL入力用のエントリー
+url_label = ctk.CTkLabel(app, text="URLを入力してください:")
+url_label.grid(row=0, column=0, columnspan=2, pady=5)
+url_entry = ctk.CTkEntry(app, width=300)
+url_entry.grid(row=1, column=0, columnspan=2, pady=5)
+
+# タイトル入力用のエントリー
+title_label = ctk.CTkLabel(app, text="イベントのタイトルを入力してください:")
+title_label.grid(row=2, column=0, columnspan=2, pady=5)
+title_entry = ctk.CTkEntry(app, width=300)
+title_entry.grid(row=3, column=0, columnspan=2, pady=5)
+
+# タスクリストボックス
+task_listbox = tk.Listbox(app, selectmode=tk.MULTIPLE, width=80, height=10)  
+task_listbox.grid(row=4, column=0, columnspan=2, pady=10)
+
+# プログレスバーを配置
+progress_bar = ctk.CTkProgressBar(app)
+progress_bar.grid(row=5, column=0, columnspan=2, pady=20)
+progress_bar.set(0)
+
+# 決定ボタン
+submit_button = ctk.CTkButton(app, text="Google Calendarに追加", command=on_submit)
+submit_button.grid(row=6, column=0, padx=20, pady=10)
+
+# 削除ボタン
+delete_button = ctk.CTkButton(app, text="日程情報削除", command=on_delete)
+delete_button.grid(row=6, column=1, padx=20, pady=10)
+
+# タスクデータをロードして表示
+load_tasks()
+update_task_listbox()
+
+app.mainloop()
+
