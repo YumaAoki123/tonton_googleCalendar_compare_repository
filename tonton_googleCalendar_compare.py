@@ -5,35 +5,48 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
-import customtkinter as ctk
-from google.oauth2 import service_account
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from dotenv import load_dotenv
-import os
-from datetime import datetime, timedelta
-import pytz
-import sqlite3
+import os.path
+import pickle
+import customtkinter as ctk
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk ,Toplevel
-import uuid
-import time
 import threading
+from datetime import datetime
+import sqlite3
+import uuid
 
-load_dotenv()
-
-email = os.getenv('EMAIL')
-
-# サービスアカウントキーファイルのパスを指定する
-SERVICE_ACCOUNT_FILE = '/tonton_googleCalendar_compare_app/creditials.json'
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
+# トークンを保存するファイルパス
+TOKEN_PICKLE = 'token.pickle'
 
-# ファイルパスを引数として渡す
-credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+def get_credentials():
+    creds = None
+    # 既にトークンが存在する場合、それを読み込む
+    if os.path.exists(TOKEN_PICKLE):
+        with open(TOKEN_PICKLE, 'rb') as token:
+            creds = pickle.load(token)
+    
+    # トークンがないか、無効または期限切れの場合、新しく認証を行う
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file('/tonton_googleCalendar_compare_app/creditials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        
+        # トークンを保存
+        with open(TOKEN_PICKLE, 'wb') as token:
+            pickle.dump(creds, token)
+    
+    return creds
 
 # Google Calendar API を使うための準備
-service = build('calendar', 'v3', credentials=credentials)
+creds = get_credentials()
+service = build('calendar', 'v3', credentials=creds)
 
 # SQLiteデータベースに接続（ファイルが存在しない場合は作成されます）
 conn = sqlite3.connect('tonton_calendar_compare.db')
@@ -98,7 +111,8 @@ def insert_event_to_calendar(service, date, start_time, end_time, task_uuid, tit
         'colorId': color_id,  # イベントの色を設定
     }
     try:
-        event_result = service.events().insert(calendarId=email, body=event).execute()
+        # カレンダーIDはユーザーのプライマリカレンダーを指定
+        event_result = service.events().insert(calendarId="primary", body=event).execute()
         print(f"イベントを追加しました: {event_result.get('htmlLink')}")
         
         event_id = event_result.get('id')
@@ -283,7 +297,6 @@ def delete_selected_task():
     if selected_task_index:
         index = selected_task_index[0]  # 選択されたタスクのインデックス
         task_uuid = tasks[index]['task_uuid']  # UUIDを取得
-        calendar_id = email  # カレンダーIDを設定
         
         # UUIDに基づいて関連するイベントIDを取得
         event_ids = get_event_ids_by_uuid(task_uuid)
@@ -298,7 +311,7 @@ def delete_selected_task():
         # Googleカレンダーのイベントを削除
         delete_successful = True
         for event_id in event_ids:
-            if delete_google_calendar_event(service, calendar_id, event_id):
+            if delete_google_calendar_event(service, event_id):
                 completed_events += 1
                 progress = completed_events / total_events
                 progress_bar.set(progress)  # プログレスバーを更新
@@ -351,9 +364,9 @@ def delete_task_info_by_uuid(cursor, task_uuid):
     except Exception as e:
         raise e
 
-def delete_google_calendar_event(service, calendar_id, event_id):
+def delete_google_calendar_event(service, event_id):
     try:
-        service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        service.events().delete(calendarId="primary", eventId=event_id).execute()
         return True
     except Exception as e:
         print(f"イベント削除中にエラーが発生しました: {e}")
