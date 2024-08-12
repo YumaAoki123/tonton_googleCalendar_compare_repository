@@ -19,8 +19,6 @@ from tkinter import messagebox, simpledialog, ttk ,Toplevel
 import uuid
 import time
 import threading
-# Webスクレイピング処理を行う関数
-
 
 load_dotenv()
 
@@ -156,7 +154,15 @@ def scrape_data(url):
         inner_html_bodybox = bodybox_element.get_attribute('innerHTML')
         soup_bodybox = BeautifulSoup(inner_html_bodybox, 'html.parser')
         table_elements = soup_bodybox.find_all('table', class_='tablestyle-01')
+         # 単一のタイトルを取得する
+        title_element = soup_bodybox.find('div', class_='titletext')
+        if title_element:
+            title_text = title_element.get_text(strip=True)
+        else:
+            title_text = 'No Title Found'  # タイトルが見つからない場合のデフォルト値
 
+        print("タイトル一覧:", title_text)
+        print("データ型:", type(title_text))
         labels = []
         for table in table_elements:
             labels.extend(table.find_all('label'))
@@ -184,28 +190,63 @@ def scrape_data(url):
                         time_list.append(time_part)
             
             date_time_dict[label_text] = time_list
+            print(f"timelist for {time_list}")
 
         result = []
         for date, times in date_time_dict.items():
+            if not times:
+                continue
+            
+            # 時間リストをソート
+            times.sort()
+            print(f"Sorted times for {date}: {times}")
+            
             formatted_times = []
+            
+            # 各時間に対して終了時刻を30分追加する
+            time_blocks = []
             for time in times:
                 start_hour = int(time[:2])
                 start_minute = int(time[2:])
-
-                end_hour = start_hour
                 end_minute = start_minute + 30
+                end_hour = start_hour
                 if end_minute >= 60:
                     end_hour += 1
                     end_minute -= 60
-
-                start_time = f"{start_hour:02d}{start_minute:02d}"
                 end_time = f"{end_hour:02d}{end_minute:02d}"
-                formatted_times.append(f"{start_time}-{end_time}")
+                time_blocks.append((f"{start_hour:02d}{start_minute:02d}", end_time))
+            
+            print(f"Time blocks with end times: {time_blocks}")
+            
+            # 時間ブロックを30分ごとの塊にまとめる
+            start_time, end_time = time_blocks[0]
+            for current_start_time, current_end_time in time_blocks[1:]:
+                end_hour = int(end_time[:2])
+                end_minute = int(end_time[2:])
+                next_start_hour = int(current_start_time[:2])
+                next_start_minute = int(current_start_time[2:])
+                
+                if end_hour == next_start_hour and end_minute == next_start_minute:
+                    # 現在の時間ブロックを延長
+                    end_time = current_end_time
+                else:
+                    # 現在の時間ブロックを追加
+                    formatted_times.append(f"{start_time}-{end_time}")
+                    print(f"Added time block: {start_time}-{end_time}")
+                    
+                    # 新しい時間ブロックの開始
+                    start_time = current_start_time
+                    end_time = current_end_time
+            
+            # 最後の時間ブロックの追加
+            formatted_times.append(f"{start_time}-{end_time}")
+            print(f"Added final time block: {start_time}-{end_time}")
             
             result.append(f"{date}: {', '.join(formatted_times)}")
+            print(f"Result for {date}: {', '.join(formatted_times)}")
 
-        return date_time_dict
-    
+        return result, title_text
+
     except Exception as e:
         return f"エラーが発生しました: {e}"
 
@@ -331,14 +372,13 @@ def on_submit():
 
 def submit_task():
     url_valid = validate_entry(url_entry)
-    title_valid = validate_entry(title_entry)
+    
     
     # 両方が有効な場合のみ処理を続行
-    if url_valid and title_valid:
+    if url_valid:
         url = url_entry.get()
-        title = title_entry.get()
-        schedule_data = scrape_data(url)
-
+        
+        schedule_data, title = scrape_data(url)  # タイトルも取得
         # タスクに固有のIDを生成
         task_uuid = str(uuid.uuid4())
         
@@ -351,16 +391,24 @@ def submit_task():
             cursor.execute('BEGIN TRANSACTION')  # トランザクション開始
             save_uuid_task_name(task_uuid, title, conn)
 
-            total_events = sum(len(times) for times in schedule_data.values())
+            total_events = len(schedule_data)
             completed_events = 0
             
-            for date, times in schedule_data.items():
+            for entry in schedule_data:
+                date, times_str = entry.split(': ')
                 date_obj = datetime.strptime(date.split('(')[0], "%Y/%m/%d")
-                for time in times:
-                    start_hour = int(time[:2])
-                    start_minute = int(time[2:])
+                time_blocks = times_str.split(', ')
+
+                for time_block in time_blocks:
+                    start_time_str, end_time_str = time_block.split('-')
+                    start_hour = int(start_time_str[:2])
+                    start_minute = int(start_time_str[2:])
+                    end_hour = int(end_time_str[:2])
+                    end_minute = int(end_time_str[2:])
+                    
                     start_time = datetime(date_obj.year, date_obj.month, date_obj.day, start_hour, start_minute)
-                    end_time = start_time + timedelta(minutes=30)
+                    end_time = datetime(date_obj.year, date_obj.month, date_obj.day, end_hour, end_minute)
+
                     
                     # Googleカレンダーにイベントを挿入
                     insert_event_to_calendar(service, date, start_time, end_time, task_uuid, title, conn)
@@ -390,6 +438,7 @@ def validate_entry(entry):
         entry.configure(border_color="black")  # 入力があればデフォルトの色に戻す
         return True        
 
+#GUIアプリの設定
 app = ctk.CTk()
 app.title("Support Schedule Adjustment")
 app.geometry("400x450")
@@ -404,27 +453,29 @@ url_label.grid(row=0, column=0, columnspan=2, pady=5)
 url_entry = ctk.CTkEntry(app, width=300)
 url_entry.grid(row=1, column=0, columnspan=2, pady=5)
 
-# タイトル入力用のエントリー
-title_label = ctk.CTkLabel(app, text="イベントのタイトルを入力してください:")
-title_label.grid(row=2, column=0, columnspan=2, pady=5)
-title_entry = ctk.CTkEntry(app, width=300)
-title_entry.grid(row=3, column=0, columnspan=2, pady=5)
+# # タイトル入力用のエントリー
+# title_label = ctk.CTkLabel(app, text="イベントのタイトルを入力してください:")
+# title_label.grid(row=2, column=0, columnspan=2, pady=5)
+# title_entry = ctk.CTkEntry(app, width=300)
+# title_entry.grid(row=3, column=0, columnspan=2, pady=5)
 
 # タスクリストボックス
+task_listbox_label = ctk.CTkLabel(app, text="調整中予定一覧:")
+task_listbox_label.grid(row=2, column=0, columnspan=2, pady=5)
 task_listbox = tk.Listbox(app, selectmode=tk.MULTIPLE, width=80, height=10)  
-task_listbox.grid(row=4, column=0, columnspan=2, pady=10)
+task_listbox.grid(row=3, column=0, columnspan=2, pady=5)
 
-# プログレスバーを配置
+# プログレスバー
 progress_bar = ctk.CTkProgressBar(app)
 progress_bar.grid(row=5, column=0, columnspan=2, pady=20)
 progress_bar.set(0)
 
 # 決定ボタン
-submit_button = ctk.CTkButton(app, text="Google Calendarに追加", command=on_submit)
+submit_button = ctk.CTkButton(app, text="カレンダーに追加", command=on_submit)
 submit_button.grid(row=6, column=0, padx=20, pady=10)
 
 # 削除ボタン
-delete_button = ctk.CTkButton(app, text="日程情報削除", command=on_delete)
+delete_button = ctk.CTkButton(app, text="日程削除", command=on_delete)
 delete_button.grid(row=6, column=1, padx=20, pady=10)
 
 # タスクデータをロードして表示
