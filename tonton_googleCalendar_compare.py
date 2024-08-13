@@ -10,6 +10,7 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import os.path
+import sys
 import pickle
 import customtkinter as ctk
 import tkinter as tk
@@ -18,40 +19,47 @@ from datetime import datetime
 import sqlite3
 import uuid
 
-
+#認証関連
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
-# トークンを保存するファイルパス
 TOKEN_PICKLE = 'token.pickle'
 
 def get_credentials():
     creds = None
+    # 実行環境に応じたファイルパスの取得
+    if getattr(sys, 'frozen', False):
+        # PyInstallerでパッケージ化された場合
+        base_path = sys._MEIPASS
+    else:
+        # 開発中の場合
+        base_path = os.path.dirname(__file__)
+
+    # credentials.jsonのパスを組み立てる
+    credentials_path = os.path.join(base_path, 'creditials.json')
+
     # 既にトークンが存在する場合、それを読み込む
     if os.path.exists(TOKEN_PICKLE):
         with open(TOKEN_PICKLE, 'rb') as token:
             creds = pickle.load(token)
-    
     # トークンがないか、無効または期限切れの場合、新しく認証を行う
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('/tonton_googleCalendar_compare_app/creditials.json', SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(credentials_path, SCOPES)
             creds = flow.run_local_server(port=0)
-        
         # トークンを保存
         with open(TOKEN_PICKLE, 'wb') as token:
             pickle.dump(creds, token)
-    
     return creds
 
 # Google Calendar API を使うための準備
 creds = get_credentials()
 service = build('calendar', 'v3', credentials=creds)
 
+#データベース関連
 # SQLiteデータベースに接続（ファイルが存在しない場合は作成されます）
 conn = sqlite3.connect('tonton_calendar_compare.db')
 cursor = conn.cursor()
-
 # テーブルを作成します（存在しない場合のみ）
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS event_mappings (
@@ -60,7 +68,6 @@ CREATE TABLE IF NOT EXISTS event_mappings (
     event_id TEXT NOT NULL
 )
 ''')
-
 # テーブルを作成します（存在しない場合のみ）
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS task_info (
@@ -69,11 +76,11 @@ CREATE TABLE IF NOT EXISTS task_info (
     task_name TEXT NOT NULL
 )
 ''')
-
 # 接続を閉じます
 conn.commit()
 conn.close()
 
+#タスクのリフレッシュ
 def load_tasks():
     conn = sqlite3.connect('tonton_calendar_compare.db')
     cursor = conn.cursor()
@@ -91,10 +98,10 @@ def load_tasks():
             "task_name": row[1],
         }
         tasks.append(task)
-        print(f"Loaded task: {task}")  # デバッグ用の出力
+        # print(f"Loaded task: {task}")  # デバッグ用の出力
        
     conn.close()
-
+#カレンダにイベントを作成
 def insert_event_to_calendar(service, date, start_time, end_time, task_uuid, title, conn, color_id="6"):
 
     """Googleカレンダーにイベントを挿入します。"""
@@ -108,20 +115,19 @@ def insert_event_to_calendar(service, date, start_time, end_time, task_uuid, tit
             'dateTime': end_time.isoformat(),
             'timeZone': 'Asia/Tokyo',
         },
-        'colorId': color_id,  # イベントの色を設定
+        'colorId': color_id, 
     }
     try:
-        # カレンダーIDはユーザーのプライマリカレンダーを指定
         event_result = service.events().insert(calendarId="primary", body=event).execute()
-        print(f"イベントを追加しました: {event_result.get('htmlLink')}")
+        # print(f"イベントを追加しました: {event_result.get('htmlLink')}")
         
         event_id = event_result.get('id')
         save_uuid_event_id_mapping(task_uuid, event_id, conn)
        
     except HttpError as error:
-                print(f'An error occurred: {error}')
+                # print(f'An error occurred: {error}')
                 raise
-
+#データベースにuuidとeventid保存
 def save_uuid_event_id_mapping(uuid, event_id, conn):
     try:
         cursor = conn.cursor()
@@ -129,7 +135,7 @@ def save_uuid_event_id_mapping(uuid, event_id, conn):
     except sqlite3.Error as e:
         print(f"Error saving event ID mapping: {e}")
         raise
-
+#データベースにuuidとtitle保存
 def save_uuid_task_name(uuid, task_name, conn):
     try:
         cursor = conn.cursor()
@@ -137,17 +143,29 @@ def save_uuid_task_name(uuid, task_name, conn):
     except sqlite3.Error as e:
         print(f"Error saving task: {e}")
         raise
-
+#リストボックスをリフレッシュ
 def update_task_listbox():
     task_listbox.delete(0, ctk.END)
     for task in tasks:
-        print(f"Current task: {task}")  # デバッグ用の出力
+        # print(f"Current task: {task}")  # デバッグ用の出力
         task_listbox.insert(ctk.END, f"{task['task_name']}")
 
+def get_chromedriver_path():
+    # 実行環境に応じたファイルパスの取得
+    if getattr(sys, 'frozen', False):
+        # PyInstallerでパッケージ化された場合
+        base_path = sys._MEIPASS
+    else:
+        # 開発中の場合
+        base_path = os.path.dirname(__file__)
 
+    # chromedriver.exeのパスを組み立てる
+    driver_path = os.path.join(base_path, 'chromedriver-win64', 'chromedriver.exe')
+    return driver_path
+
+#ページからスクレイピングで必要な情報(タイトルと日時)を取得
 def scrape_data(url):
-            # ChromeDriver のパスを指定（ダウンロードしたchromedriverのパスに置き換えてください）
-    driver_path = 'C:\chromedriver-win64\chromedriver.exe'  # 例: C:\\path\\to\\chromedriver.exe
+    driver_path = get_chromedriver_path()
     service = Service(driver_path)
 
     # ブラウザオプションの設定
@@ -158,7 +176,6 @@ def scrape_data(url):
     driver = webdriver.Chrome(service=service, options=chrome_options)
     
     try:
-        driver = webdriver.Chrome()  # または使用するブラウザに応じて適切なWebDriverを指定してください
         driver.get(url)
 
         bodybox_element = WebDriverWait(driver, 20).until(
@@ -175,8 +192,6 @@ def scrape_data(url):
         else:
             title_text = 'No Title Found'  # タイトルが見つからない場合のデフォルト値
 
-        print("タイトル一覧:", title_text)
-        print("データ型:", type(title_text))
         labels = []
         for table in table_elements:
             labels.extend(table.find_all('label'))
@@ -204,16 +219,15 @@ def scrape_data(url):
                         time_list.append(time_part)
             
             date_time_dict[label_text] = time_list
-            print(f"timelist for {time_list}")
+            # print(f"timelist for {time_list}")
 
         result = []
         for date, times in date_time_dict.items():
             if not times:
                 continue
-            
             # 時間リストをソート
             times.sort()
-            print(f"Sorted times for {date}: {times}")
+            # print(f"Sorted times for {date}: {times}")
             
             formatted_times = []
             
@@ -230,7 +244,7 @@ def scrape_data(url):
                 end_time = f"{end_hour:02d}{end_minute:02d}"
                 time_blocks.append((f"{start_hour:02d}{start_minute:02d}", end_time))
             
-            print(f"Time blocks with end times: {time_blocks}")
+            # print(f"Time blocks with end times: {time_blocks}")
             
             # 時間ブロックを30分ごとの塊にまとめる
             start_time, end_time = time_blocks[0]
@@ -246,7 +260,7 @@ def scrape_data(url):
                 else:
                     # 現在の時間ブロックを追加
                     formatted_times.append(f"{start_time}-{end_time}")
-                    print(f"Added time block: {start_time}-{end_time}")
+                    # print(f"Added time block: {start_time}-{end_time}")
                     
                     # 新しい時間ブロックの開始
                     start_time = current_start_time
@@ -254,10 +268,10 @@ def scrape_data(url):
             
             # 最後の時間ブロックの追加
             formatted_times.append(f"{start_time}-{end_time}")
-            print(f"Added final time block: {start_time}-{end_time}")
+            # print(f"Added final time block: {start_time}-{end_time}")
             
             result.append(f"{date}: {', '.join(formatted_times)}")
-            print(f"Result for {date}: {', '.join(formatted_times)}")
+            # print(f"Result for {date}: {', '.join(formatted_times)}")
 
         return result, title_text
 
@@ -286,12 +300,11 @@ def get_event_ids_by_uuid(uuid):
     return event_ids
 
 def on_delete():
-    progress_bar.set(0)  # プログレスバーをリセット
     # サブミット時の処理を別スレッドで実行する
     threading.Thread(target=delete_selected_task, daemon=True).start()
 
 def delete_selected_task():
-    
+    progress_bar, progress_window = show_progress_window()
     selected_task_index = task_listbox.curselection()
     
     if selected_task_index:
@@ -327,14 +340,14 @@ def delete_selected_task():
                 delete_event_ids_by_uuid(cursor, task_uuid)
                 delete_task_info_by_uuid(cursor, task_uuid)
                 conn.commit()  # コミット
-                print("タスクと関連イベントが削除されました。")
+                # print("タスクと関連イベントが削除されました。")
             else:
                 # Googleカレンダーでイベント削除失敗した場合
                 # イベントが削除された場合もあるため、タスク情報を削除するか確認する
                 delete_event_ids_by_uuid(cursor, task_uuid)
                 delete_task_info_by_uuid(cursor, task_uuid)
                 conn.commit()  # コミット
-                print("イベントの削除が一部失敗しましたが、データベースの整合性を保つためにタスク情報も削除しました。")
+                # print("イベントの削除が一部失敗しましたが、データベースの整合性を保つためにタスク情報も削除しました。")
                 
             # タスクをリストから削除
             del tasks[index]
@@ -348,6 +361,8 @@ def delete_selected_task():
         finally:
             conn.close()
             progress_bar.set(1)  # プログレスバーを完了に設定
+            # 処理が完了したらウィンドウを閉じる
+            progress_window.destroy()
     else:
         print("削除するタスクを選択してください。")
 
@@ -379,11 +394,12 @@ def update_task_delete_listbox():
     for task in tasks:
         task_listbox.insert(ctk.END, f"{task['task_name']}")
 def on_submit():
-    progress_bar.set(0)  # プログレスバーをリセット
     # サブミット時の処理を別スレッドで実行する
     threading.Thread(target=submit_task, daemon=True).start()
 
 def submit_task():
+    # プログレスウィンドウとプログレスバーを表示
+    progress_bar, progress_window = show_progress_window()
     url_valid = validate_entry(url_entry)
     
     
@@ -430,17 +446,20 @@ def submit_task():
                     progress_bar.set(progress)  # プログレスバーを更新
                     app.update_idletasks()  # GUIの更新を確実に反映する
             cursor.execute('COMMIT')  # コミット
-            print("すべてのデータが成功裏に保存されました")
+            # print("すべてのデータが成功裏に保存されました")
             
         except Exception as e:
             cursor.execute('ROLLBACK')  # ロールバック
-            print(f"エラーが発生したため、変更を元に戻しました: {e}")
+            # print(f"エラーが発生したため、変更を元に戻しました: {e}")
         
         finally:
             conn.close()
             load_tasks()
             update_task_listbox()
             progress_bar.set(1)  # プログレスバーを完了に設定
+            # 処理が完了したらウィンドウを閉じる
+            progress_window.destroy()
+           
 
 def validate_entry(entry):
     """エントリーが空の場合に枠を赤くする関数"""
@@ -478,14 +497,35 @@ task_listbox_label.grid(row=2, column=0, columnspan=2, pady=5)
 task_listbox = tk.Listbox(app, selectmode=tk.MULTIPLE, width=80, height=10)  
 task_listbox.grid(row=3, column=0, columnspan=2, pady=5)
 
-# プログレスバー
-progress_bar = ctk.CTkProgressBar(app)
-progress_bar.grid(row=5, column=0, columnspan=2, pady=20)
-progress_bar.set(0)
-
 # 決定ボタン
 submit_button = ctk.CTkButton(app, text="カレンダーに追加", command=on_submit)
 submit_button.grid(row=6, column=0, padx=20, pady=10)
+
+
+def show_progress_window():
+    # 新しいウィンドウを作成
+    progress_window = ctk.CTkToplevel(app)
+     # ウィンドウのサイズ調整
+    progress_window.geometry("300x100")
+    progress_window.title("処理中")
+
+    # サブウィンドウを最前面に持ってくる
+    progress_window.lift()  # サブウィンドウを最前面に表示
+    progress_window.attributes('-topmost', True)
+    progress_window.after(10, lambda: progress_window.attributes('-topmost', False))
+
+    # プログレスバーを配置
+    progress_bar = ctk.CTkProgressBar(progress_window)
+    progress_bar.grid(padx=20, pady=10)
+    progress_bar.set(0)  # 初期値は0に設定
+
+    # メッセージラベルを配置
+    message_label = ctk.CTkLabel(progress_window, text="しばらくお待ちください...")
+    message_label.grid(padx=20, pady=10)
+
+    
+
+    return progress_bar, progress_window
 
 # 削除ボタン
 delete_button = ctk.CTkButton(app, text="日程削除", command=on_delete)
