@@ -19,6 +19,7 @@ from datetime import datetime
 import sqlite3
 import uuid
 import html
+import re
 #認証関連
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -428,10 +429,11 @@ def on_submit():
 def submit_task():
     raw_url = url_entry.get()
         # エスケープ処理を行う
-    safe_url = escape_input(raw_url)
-    url_valid = validate_entry(safe_url)
+    
+    url_valid = validate_entry(url_entry)
     # 両方が有効な場合のみ処理を続行
     if url_valid:
+        safe_url = escape_input(raw_url)
         # プログレスウィンドウとプログレスバーを表示
         progress_bar, progress_window, message_label = show_progress_window()
         update_message(message_label)  # メッセージの動的更新を開始
@@ -547,13 +549,25 @@ def show_error_window(error_message):
     error_window.after(10, lambda: error_window.attributes('-topmost', False))
 
 def validate_entry(entry):
-    """エントリーが空の場合に枠を赤くする関数"""
-    if not entry.get().strip():  # 入力が空かどうかをチェック
+    """エントリーが空の場合やURLが無効な場合に枠を赤くする関数"""
+    
+    # エントリーから文字列を取得してトリム
+    url = entry.get().strip()
+
+    # 入力が空かどうかをチェック
+    if not url:
         entry.configure(border_color="red")
         return False
+
+    # URLが https:// または http:// で始まるかどうかをチェック
+    url_pattern = re.compile(r'^(https?://)')
+    
+    if url_pattern.match(url):
+        entry.configure(border_color="black")  # URLが有効な場合は枠の色を戻す
+        return True
     else:
-        entry.configure(border_color="black")  # 入力があればデフォルトの色に戻す
-        return True        
+        entry.configure(border_color="red")  # 無効な場合は枠を赤くする
+        return False      
 
 # GUIアプリの設定
 app = ctk.CTk()
