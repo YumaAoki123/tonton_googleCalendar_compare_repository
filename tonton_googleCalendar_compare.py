@@ -18,7 +18,6 @@ import threading
 from datetime import datetime
 import sqlite3
 import uuid
-import html
 import re
 #認証関連
 
@@ -418,31 +417,24 @@ def update_task_delete_listbox():
     for task in tasks:
         task_listbox.insert(ctk.END, f"{task['task_name']}")
 
-def escape_input(user_input):
-    # HTMLエンティティに変換
-    return html.escape(user_input)
-
 def on_submit():
     # サブミット時の処理を別スレッドで実行する
     threading.Thread(target=submit_task, daemon=True).start()
 
 def submit_task():
-    raw_url = url_entry.get()
-        # エスケープ処理を行う
-    
+    url = url_entry.get()
+       
     url_valid = validate_entry(url_entry)
-    # 両方が有効な場合のみ処理を続行
+   
     if url_valid:
-        safe_url = escape_input(raw_url)
         # プログレスウィンドウとプログレスバーを表示
         progress_bar, progress_window, message_label = show_progress_window()
         update_message(message_label)  # メッセージの動的更新を開始
        
-
         eroor = None  # エラー状態を示す変数
         try:
             # データの取得
-            schedule_data, title = scrape_data(safe_url)  # タイトルも取得
+            schedule_data, title = scrape_data(url)  # タイトルも取得
 
             if schedule_data is None or title is None:
                 # エラーが発生した場合
@@ -569,7 +561,7 @@ def validate_entry(entry):
         entry.configure(border_color="red")  # 無効な場合は枠を赤くする
         return False      
 
-# GUIアプリの設定
+# メインの設定
 app = ctk.CTk()
 app.title("Support Schedule Adjustment")
 app.geometry("300x280")
@@ -579,8 +571,8 @@ app.grid_columnconfigure(0, weight=1)
 app.grid_columnconfigure(1, weight=1)
 
 # フォントとスタイル設定
-ctk.set_appearance_mode("dark")  # ダークモード
-ctk.set_default_color_theme("blue")  # 青色テーマ
+ctk.set_appearance_mode("dark") 
+ctk.set_default_color_theme("blue")  
 
 # URL入力用のエントリーと追加ボタン
 url_entry = ctk.CTkEntry(app, width=250, placeholder_text="URLをここに入力", font=("Hiragino Sans GB", 12, 'bold'))
@@ -655,9 +647,85 @@ def update_message(label):
     label.configure(text=new_text)
     # 500ミリ秒後に再度この関数を呼び出す
     label.after(500, update_message, label)
-# タスクデータをロードして表示
+# # タスクデータをロードして表示
 load_tasks()
 update_task_listbox()
-
 app.mainloop()
 
+
+
+# class MainApp(ctk.CTk):
+#     def __init__(self):
+#         super().__init__()
+        
+#         # ウィンドウの設定
+#         self.title("Support Schedule Adjustment")
+#         self.geometry("300x200")
+
+#         # タスクリストのデータを保持するリスト
+#         self.tasks = []
+
+#         # ウィジェットの初期化
+#         self.create_widgets()
+
+#         # タスクリストの読み込み
+#         self.load_tasks()
+#         self.update_task_listbox()
+
+#     def create_widgets(self):
+
+#         # URL入力用のエントリーと追加ボタン
+#         self.url_entry = ctk.CTkEntry(self, width=250, placeholder_text="URLをここに入力", font=("Hiragino Sans GB", 12, 'bold'))
+#         self.url_entry.grid(row=1, column=0, padx=10, pady=10, sticky="ew")
+
+#         self.add_button = ctk.CTkButton(self, text="追加", command=on_submit, font=("Hiragino Sans GB", 12, 'bold'))
+#         self.add_button.grid(row=1, column=1, padx=10, pady=10)
+
+#         # タスクリストボックス
+#         self.task_listbox_label = ctk.CTkLabel(
+#         self, 
+#         text="調整中予定一覧", 
+#         font=("Hiragino Sans GB", 14, 'bold'),
+#         anchor="w"  # 左揃え
+#         )
+#         self.task_listbox_label.grid(row=2, column=0, columnspan=2, pady=2, padx=10, sticky="w")  # padyを5に変更
+
+#         self.task_listbox = tk.Listbox(self, selectmode=tk.MULTIPLE, width=80, height=10, font=("Hiragino Sans GB", 12, 'bold'), bg="white")
+#         self.task_listbox.grid(row=3, column=0, columnspan=2, pady=10, padx=10)  # padyはそのまま
+
+#         # 削除ボタン
+#         self.delete_button = ctk.CTkButton(self, text="削除", command=on_delete, font=("Hiragino Sans GB", 12, 'bold'))
+#         self.delete_button.grid(row=4, column=1, padx=20, pady=10)
+
+#     #タスクのリフレッシュ
+#     def load_tasks(self):
+#         conn = sqlite3.connect('tonton_calendar_compare.db')
+#         cursor = conn.cursor()
+        
+#         # タスク情報をデータベースから読み込む
+#         cursor.execute('SELECT task_uuid, task_name FROM task_info')
+#         rows = cursor.fetchall()
+        
+#         # タスクリストを初期化
+#         self.tasks = []
+        
+#         for row in rows:
+#             task = {
+#                 "task_uuid": row[0],
+#                 "task_name": row[1],
+#             }
+#             self.tasks.append(task)
+#             # print(f"Loaded task: {task}")  # デバッグ用の出力
+        
+#         conn.close()
+
+#     #リストボックスをリフレッシュ
+#     def update_task_listbox(self):
+#         self.task_listbox.delete(0, ctk.END)
+#         for task in self.tasks:
+#             # print(f"Current task: {task}")  # デバッグ用の出力
+#             self.task_listbox.insert(ctk.END, f"{task['task_name']}")
+
+# if __name__ == "__main__":
+#     app = MainApp()
+#     app.mainloop()
