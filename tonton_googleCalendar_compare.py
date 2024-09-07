@@ -168,108 +168,108 @@ def get_chromedriver_path():
     driver_path = os.path.join(base_path, 'chromedriver-win64', 'chromedriver.exe')
     return driver_path
 
-# def scrape_data(url):
-#     driver_path = get_chromedriver_path()
-#     service = Service(driver_path)
+def scrape_data(url):
+    driver_path = get_chromedriver_path()
+    service = Service(driver_path)
 
-#     # ブラウザオプションの設定
-#     chrome_options = Options()
-#     chrome_options.add_argument('--headless')  # ヘッドレスモードで実行（ブラウザを表示しない）
+    # ブラウザオプションの設定
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')  # ヘッドレスモードで実行（ブラウザを表示しない）
 
-#     # Chrome ブラウザを起動
-#     driver = webdriver.Chrome(service=service, options=chrome_options)
+    # Chrome ブラウザを起動
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     
-#     try:
-#         driver.get(url)
+    try:
+        driver.get(url)
 
-#         bodybox_element = WebDriverWait(driver, 20).until(
-#             EC.presence_of_element_located((By.ID, 'bodybox'))
-#         )
+        bodybox_element = WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.ID, 'bodybox'))
+        )
 
-#         inner_html_bodybox = bodybox_element.get_attribute('innerHTML')
-#         soup_bodybox = BeautifulSoup(inner_html_bodybox, 'html.parser')
-#         table_elements = soup_bodybox.find_all('table', class_='tablestyle-01')
+        inner_html_bodybox = bodybox_element.get_attribute('innerHTML')
+        soup_bodybox = BeautifulSoup(inner_html_bodybox, 'html.parser')
+        table_elements = soup_bodybox.find_all('table', class_='tablestyle-01')
 
-#         title_element = soup_bodybox.find('div', class_='titletext')
-#         if title_element:
-#             title_text = title_element.get_text(strip=True)
-#         else:
-#             title_text = 'No Title Found'
+        title_element = soup_bodybox.find('div', class_='titletext')
+        if title_element:
+            title_text = title_element.get_text(strip=True)
+        else:
+            title_text = 'No Title Found'
 
-#         labels = []
-#         for table in table_elements:
-#             labels.extend(table.find_all('label'))
+        labels = []
+        for table in table_elements:
+            labels.extend(table.find_all('label'))
 
-#         label_texts = [label.get_text(strip=True) for label in labels]
+        label_texts = [label.get_text(strip=True) for label in labels]
 
-#         date_time_dict = {}
+        date_time_dict = {}
 
-#         for i, label_text in enumerate(label_texts):
-#             div_id = f'myTimelineDispDiv_{i}'
-#             div_element = WebDriverWait(driver, 20).until(
-#                 EC.presence_of_element_located((By.ID, div_id))
-#             )
+        for i, label_text in enumerate(label_texts):
+            div_id = f'myTimelineDispDiv_{i}'
+            div_element = WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.ID, div_id))
+            )
 
-#             inner_html_div = div_element.get_attribute('innerHTML')
-#             soup_div = BeautifulSoup(inner_html_div, 'html.parser')
-#             span_elements = soup_div.find_all('span', class_=['timesel_enabled timesel_00', 'timesel_enabled timesel_30'])
+            inner_html_div = div_element.get_attribute('innerHTML')
+            soup_div = BeautifulSoup(inner_html_div, 'html.parser')
+            span_elements = soup_div.find_all('span', class_=['timesel_enabled timesel_00', 'timesel_enabled timesel_30'])
 
-#             time_list = []
-#             if span_elements:
-#                 for span in span_elements:
-#                     span_id = span.get('id')
-#                     if span_id:
-#                         time_part = span_id.split('_')[-1]
-#                         time_list.append(time_part)
+            time_list = []
+            if span_elements:
+                for span in span_elements:
+                    span_id = span.get('id')
+                    if span_id:
+                        time_part = span_id.split('_')[-1]
+                        time_list.append(time_part)
             
-#             date_time_dict[label_text] = time_list
+            date_time_dict[label_text] = time_list
 
-#         result = []
-#         for date, times in date_time_dict.items():
-#             if not times:
-#                 continue
+        result = []
+        for date, times in date_time_dict.items():
+            if not times:
+                continue
             
-#             times.sort()
+            times.sort()
             
-#             formatted_times = []
+            formatted_times = []
             
-#             time_blocks = []
-#             for time in times:
-#                 start_hour = int(time[:2])
-#                 start_minute = int(time[2:])
-#                 end_minute = start_minute + 30
-#                 end_hour = start_hour
-#                 if end_minute >= 60:
-#                     end_hour += 1
-#                     end_minute -= 60
-#                 end_time = f"{end_hour:02d}{end_minute:02d}"
-#                 time_blocks.append((f"{start_hour:02d}{start_minute:02d}", end_time))
+            time_blocks = []
+            for time in times:
+                start_hour = int(time[:2])
+                start_minute = int(time[2:])
+                end_minute = start_minute + 30
+                end_hour = start_hour
+                if end_minute >= 60:
+                    end_hour += 1
+                    end_minute -= 60
+                end_time = f"{end_hour:02d}{end_minute:02d}"
+                time_blocks.append((f"{start_hour:02d}{start_minute:02d}", end_time))
             
-#             start_time, end_time = time_blocks[0]
-#             for current_start_time, current_end_time in time_blocks[1:]:
-#                 end_hour = int(end_time[:2])
-#                 end_minute = int(end_time[2:])
-#                 next_start_hour = int(current_start_time[:2])
-#                 next_start_minute = int(current_start_time[2:])
+            start_time, end_time = time_blocks[0]
+            for current_start_time, current_end_time in time_blocks[1:]:
+                end_hour = int(end_time[:2])
+                end_minute = int(end_time[2:])
+                next_start_hour = int(current_start_time[:2])
+                next_start_minute = int(current_start_time[2:])
                 
-#                 if end_hour == next_start_hour and end_minute == next_start_minute:
-#                     end_time = current_end_time
-#                 else:
-#                     formatted_times.append(f"{start_time}-{end_time}")
-#                     start_time = current_start_time
-#                     end_time = current_end_time
+                if end_hour == next_start_hour and end_minute == next_start_minute:
+                    end_time = current_end_time
+                else:
+                    formatted_times.append(f"{start_time}-{end_time}")
+                    start_time = current_start_time
+                    end_time = current_end_time
             
-#             formatted_times.append(f"{start_time}-{end_time}")
+            formatted_times.append(f"{start_time}-{end_time}")
             
-#             result.append(f"{date}: {', '.join(formatted_times)}")
+            result.append(f"{date}: {', '.join(formatted_times)}")
        
-#         return result, title_text
+        return result, title_text
        
-#     except Exception as e:
-#         return f"エラーが発生しました: {e}"
+    except Exception as e:
+        return f"エラーが発生しました: {e}"
 
-#     finally:
-#         driver.quit()
+    finally:
+        driver.quit()
 
 
 def get_event_ids_by_uuid(uuid):
